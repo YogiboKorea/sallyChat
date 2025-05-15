@@ -56,7 +56,7 @@ const basePrompt = `
 맞춤법 다음문장에서는 문단 공백을 통해 가독성을 높여 주세요.
 
 2. 고객 응대 지침  
-정확한 답변: 웹상의 모든 요기보 관련 데이터를 숙지하고, 고객 문의에 대해 명확하고 이해하기 쉬운 답변을 제공해 주세요.  
+정확한 답변: 웹상의 모든 샐리필 관련 데이터를 숙지하고, 고객 문의에 대해 명확하고 이해하기 쉬운 답변을 제공해 주세요.  
 아래 JSON 데이터는 참고용 포스트잇 Q&A 데이터입니다. 이 데이터를 참고하여 적절한 답변을 생성해 주세요.
 
 3. 항상 모드 대화의 마지막엔 추가 궁금한 사항이 있으실 경우, 상담사 연결을 채팅창에 입력 해주시면 보다 정확한 정보를 제공해 드릴수 있습니다. 
@@ -155,6 +155,47 @@ async function apiRequest(method, url, data = {}, params = {}) {
   }
 }
 
+
+async function findAnswer(userInput, memberId) {
+  const normalized = normalizeSentence(userInput);
+
+  // 1. FAQ 예시 처리
+  if (normalized.includes("사이즈")) {
+    return {
+      text: "요기보 사이즈는 모델에 따라 다릅니다. 예) 맥스는 170cm x 70cm 크기예요 😊",
+      videoHtml: null,
+      description: null,
+      imageUrl: null
+    };
+  }
+
+  // 2. 배송 상태 요청
+  if (normalized.includes("배송")) {
+    if (!memberId) {
+      return {
+        text: "비회원은 배송 상태를 확인할 수 없습니다. 로그인을 해주세요!",
+        videoHtml: null,
+        description: null,
+        imageUrl: null
+      };
+    }
+    // 배송 조회 로직 들어가는 자리...
+    return {
+      text: "주문하신 상품은 현재 배송 중입니다 🚚",
+      videoHtml: null,
+      description: null,
+      imageUrl: null
+    };
+  }
+
+  // 3. fallback
+  return {
+    text: "질문을 이해하지 못했어요. 좀더 자세히 입력 해주시겠어요",
+    videoHtml: null,
+    description: null,
+    imageUrl: null
+  };
+}
 
 // ========== [5] Cafe24 주문/배송 관련 함수 ==========
 async function getOrderShippingInfo(memberId) {
@@ -298,16 +339,16 @@ async function initializeChatPrompt() {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    const sallyPostItNotes = await db.collection("sallyPostItNotes").find({}).limit(100).toArray();
+    const postItNotes = await db.collection("postItNotes").find({}).limit(100).toArray();
 
-    let sallyPostItContext = "\n아래는 참고용 포스트잇 Q&A 데이터입니다:\n";
-    sallyPostItNotes.forEach(note => {
+    let postItContext = "\n아래는 참고용 포스트잇 Q&A 데이터입니다:\n";
+    postItNotes.forEach(note => {
       if (note.question && note.answer) {
-        sallyPostItContext += `\n질문: ${note.question}\n답변: ${note.answer}\n`;
+        postItContext += `\n질문: ${note.question}\n답변: ${note.answer}\n`;
       }
     });
 
-    return YOGIBO_SYSTEM_PROMPT + sallyPostItContext;
+    return YOGIBO_SYSTEM_PROMPT + postItContext;
   } catch (err) {
     console.error("Post-it 로딩 오류:", err);
     return YOGIBO_SYSTEM_PROMPT;
@@ -324,7 +365,7 @@ async function saveConversationLog(memberId, userMessage, botResponse) {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    const logs = db.collection("sallyfeelDataLoding");
+    const logs = db.collection("conversationLogs");
 
     const logEntry = {
       userMessage,
@@ -343,6 +384,190 @@ async function saveConversationLog(memberId, userMessage, botResponse) {
 }
 
 
+// ========== [11] 메인 로직: findAnswer ==========
+async function findAnswer(userInput, memberId) {
+  const normalizedUserInput = normalizeSentence(userInput);
+
+
+  /************************************************
+   * B. Café24 주문/배송 로직
+   ************************************************/
+  // (8) 회원 아이디 조회
+  if (
+    normalizedUserInput.includes("내 아이디") ||
+    normalizedUserInput.includes("나의 아이디") ||
+    normalizedUserInput.includes("아이디 조회") ||
+    normalizedUserInput.includes("아이디 알려줘")
+  ) {
+    if (memberId && memberId !== "null") {
+      return {
+        text: `안녕하세요 ${memberId} 고객님, 궁금하신 사항을 남겨주세요.`,
+        videoHtml: null,
+        description: null,
+        imageUrl: null,
+      };
+    } else {
+      return {
+        text: `안녕하세요 고객님 회원가입을 통해 요기보의 다양한 이벤트 혜택을 만나보실수 있어요! <a href="/member/login.html" target="_blank">회원가입 하러가기</a>`,
+        videoHtml: null,
+        description: null,
+        imageUrl: null,
+      };
+    }
+  }
+
+  // (9) 주문번호가 포함된 경우 처리
+  if (containsOrderNumber(normalizedUserInput)) {
+    if (memberId && memberId !== "null") {
+      try {
+        const match = normalizedUserInput.match(/\d{8}-\d{7}/);
+        const targetOrderNumber = match ? match[0] : "";
+        const shipment = await getShipmentDetail(targetOrderNumber);
+        if (shipment) {
+          console.log("Shipment 전체 데이터:", shipment);
+          console.log("shipment.status 값:", shipment.status);
+          console.log("shipment.items 값:", shipment.items);
+          const shipmentStatus =
+            shipment.status || (shipment.items && shipment.items.length > 0 ? shipment.items[0].status : undefined);
+          const itemStatusMap = {
+            standby: "배송대기",
+            shipping: "배송중",
+            shipped: "배송완료",
+            shipready:"배송준비중" 
+          };
+          const statusText = itemStatusMap[shipmentStatus] || shipmentStatus || "배송 완료";
+          const trackingNo = shipment.tracking_no || "정보 없음";
+          const shippingCompany = shipment.shipping_company_name || "정보 없음";
+          return {
+            text: `주문번호 ${targetOrderNumber}의 배송 상태는 ${statusText}이며, 송장번호는 ${trackingNo}, 택배사는 ${shippingCompany} 입니다.`,
+            videoHtml: null,
+            description: null,
+            imageUrl: null,
+          };
+        } else {
+          return {
+            text: "해당 주문번호에 대한 배송 정보를 찾을 수 없습니다.",
+            videoHtml: null,
+            description: null,
+            imageUrl: null,
+          };
+        }
+      } catch (error) {
+        return {
+          text: "배송 정보를 확인하는 데 오류가 발생했습니다.",
+          videoHtml: null,
+          description: null,
+          imageUrl: null,
+        };
+      }
+    } else {
+      return { 
+        text: `배송은 제품 출고 후 1~3 영업일 정도 소요되며, 제품별 출고 시 소요되는 기간은 아래 내용을 확인해주세요.
+        - 소파 및 바디필로우: 주문 확인 후 제작되는 제품으로, 3~7 영업일 이내에 출고됩니다.
+        - 모듀(모듈러) 소파: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+        - 그 외 제품: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+        일부 제품은 오후 1시 이전에 구매를 마쳐주시면 당일 출고될 수 있어요.
+        개별 배송되는 제품을 여러 개 구매하신 경우 제품이 여러 차례로 나눠 배송될 수 있습니다.
+        주문 폭주 및 재난 상황이나 천재지변, 택배사 사정 등에 의해 배송 일정이 일부 변경될 수 있습니다.
+        추가 문의사항이 있으신 경우 Yogibo 고객센터로 문의해주세요.`,
+        videoHtml: null,
+        description: null,
+        imageUrl: null
+      };
+    }
+  }
+
+  // (10) 주문번호 없이 주문상태 확인 처리
+  if (
+    (normalizedUserInput.includes("주문상태 확인") ||
+      normalizedUserInput.includes("배송") ||
+      normalizedUserInput.includes("배송 상태 확인") ||
+      normalizedUserInput.includes("상품 배송정보") ||
+      normalizedUserInput.includes("배송상태 확인") ||
+      normalizedUserInput.includes("주문정보 확인") ||
+      normalizedUserInput.includes("배송정보 확인")) &&
+    !containsOrderNumber(normalizedUserInput)
+  ) {
+    if (memberId && memberId !== "null") {
+      try {
+        const orderData = await getOrderShippingInfo(memberId);
+        if (orderData.orders && orderData.orders.length > 0) {
+          const targetOrder = orderData.orders[0];
+          const shipment = await getShipmentDetail(targetOrder.order_id);
+          if (shipment) {
+            const shipmentStatus =
+              shipment.status || (shipment.items && shipment.items.length > 0 ? shipment.items[0].status : undefined);
+            const itemStatusMap = {
+              standby: "배송대기",
+              shipping: "배송중",
+              shipped: "배송완료",
+              shipready:"배송준비중",
+            };
+            const statusText = itemStatusMap[shipmentStatus] || shipmentStatus || "배송완료";
+            const trackingNo = shipment.tracking_no || "등록전";
+            let shippingCompany = shipment.shipping_company_name || "등록전";
+    
+            if (shippingCompany === "롯데 택배") {
+              shippingCompany = `<a href="https://www.lotteglogis.com/home/reservation/tracking/index" target="_blank">${shippingCompany}</a>`;
+            } else if (shippingCompany === "경동 택배") {
+              shippingCompany = `<a href="https://kdexp.com/index.do" target="_blank">${shippingCompany}</a>`;
+            }
+    
+            return {
+              text: `고객님께서 주문하신 상품은 ${shippingCompany}를 통해 ${statusText} 이며, 운송장 번호는 ${trackingNo} 입니다.`,
+              videoHtml: null,
+              description: null,
+              imageUrl: null
+            };
+          } else {
+            return { text: "해당 주문에 대한 배송 상세 정보를 찾을 수 없습니다." };
+          }
+        } else {
+          return { 
+            text: `배송은 제품 출고 후 1~3 영업일 정도 소요되며, 제품별 출고 시 소요되는 기간은 아래 내용을 확인해주세요.
+            - 소파 및 바디필로우: 주문 확인 후 제작되는 제품으로, 3~7 영업일 이내에 출고됩니다.
+            - 모듀(모듈러) 소파: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+            - 그 외 제품: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+            일부 제품은 오후 1시 이전에 구매를 마쳐주시면 당일 출고될 수 있어요.
+            개별 배송되는 제품을 여러 개 구매하신 경우 제품이 여러 차례로 나눠 배송될 수 있습니다.
+            주문 폭주 및 재난 상황이나 천재지변, 택배사 사정 등에 의해 배송 일정이 일부 변경될 수 있습니다.
+            추가 문의사항이 있으신 경우 Yogibo 고객센터로 문의해주세요.`,
+            videoHtml: null,
+            description: null,
+            imageUrl: null
+          };
+        }
+      } catch (error) {
+        return { text: "고객님의 주문 정보를 찾을 수 없습니다. 주문 여부를 확인해주세요." };
+      }
+    } else {
+      return { 
+        text: `배송은 제품 출고 후 1~3 영업일 정도 소요되며, 제품별 출고 시 소요되는 기간은 아래 내용을 확인해주세요.
+        - 소파 및 바디필로우: 주문 확인 후 제작되는 제품으로, 3~7 영업일 이내에 출고됩니다.
+        - 모듀(모듈러) 소파: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+        - 그 외 제품: 주문 확인일로부터 1~3 영업일 이내에 출고됩니다.
+        일부 제품은 오후 1시 이전에 구매를 마쳐주시면 당일 출고될 수 있어요.
+        개별 배송되는 제품을 여러 개 구매하신 경우 제품이 여러 차례로 나눠 배송될 수 있습니다.
+        주문 폭주 및 재난 상황이나 천재지변, 택배사 사정 등에 의해 배송 일정이 일부 변경될 수 있습니다.
+        추가 문의사항이 있으신 경우 Yogibo 고객센터로 문의해주세요.`,
+        videoHtml: null,
+        description: null,
+        imageUrl: null
+      };
+    }
+  }
+  
+  /************************************************
+   * C. 최종 fallback
+   ************************************************/
+  return {
+    text: "질문을 이해하지 못했어요. 좀더 자세히 입력 해주시겠어요",
+    videoHtml: null,
+    description: null,
+    imageUrl: null,
+  };
+}
+
 // ========== [Chat 요청 처리] ==========
 app.post("/chat", async (req, res) => {
   const userInput = req.body.message;
@@ -357,7 +582,7 @@ app.post("/chat", async (req, res) => {
 
     let responseText;
 
-    // 👉 FAQ, 주문/배송, sallyPostIt 기반 응답 시도
+    // 👉 FAQ, 주문/배송, PostIt 기반 응답 시도
     const answer = await findAnswer(normalizedInput, memberId);
 
     // fallback 응답일 경우 GPT 호출
@@ -439,7 +664,9 @@ app.get('/chatConnet', async (req, res) => {
 });
 
 
-// ========== [6] 포스트잇 CRUD ==========
+// ========== [14] 포스트잇 노트 CRUD (sallyPostIt) ==========
+
+
 app.get("/sallyPostIt", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const PAGE_SIZE = 300;
@@ -451,10 +678,9 @@ app.get("/sallyPostIt", async (req, res) => {
     await client.connect();
     const db = client.db(DB_NAME);
     const collection = db.collection("sallyPostItNotes");
-
     const totalCount = await collection.countDocuments(queryFilter);
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-    const currentPage = Math.max(1, Math.min(page, totalPages || 1));
+    let currentPage = Math.max(1, Math.min(page, totalPages || 1));
     const skipCount = (currentPage - 1) * PAGE_SIZE;
 
     const notes = await collection.find(queryFilter)
@@ -464,7 +690,6 @@ app.get("/sallyPostIt", async (req, res) => {
       .toArray();
 
     notes.forEach(doc => doc._id = doc._id.toString());
-
     await client.close();
     return res.json({ notes, currentPage, totalPages, totalCount, pageSize: PAGE_SIZE });
   } catch (error) {
@@ -485,24 +710,14 @@ app.post("/sallyPostIt", async (req, res) => {
     const db = client.db(DB_NAME);
     const collection = db.collection("sallyPostItNotes");
 
+    const convertedAnswer = answer ? convertHashtagsToLinks(answer) : answer;
     const newNote = {
       question,
-      answer: convertHashtagsToLinks(answer),
+      answer: convertedAnswer,
       category: category || "uncategorized",
       createdAt: new Date()
     };
 
-
-    function convertHashtagsToLinks(text) {
-      const hashtagLinks = {
-        '홈페이지': 'https://sallyfeel.com/',
-      };
-      return text.replace(/@([\w가-힣]+)/g, (match, keyword) => {
-        const url = hashtagLinks[keyword];
-        return url ? `<a href="${url}" target="_blank">${keyword}</a>` : keyword;
-      });
-    }
-    
     await collection.insertOne(newNote);
     await client.close();
 
@@ -516,10 +731,9 @@ app.post("/sallyPostIt", async (req, res) => {
 });
 
 app.put("/sallyPostIt/:id", async (req, res) => {
+  const noteId = req.params.id;
+  const { question, answer, category } = req.body;
   try {
-    const noteId = req.params.id;
-    const { question, answer, category } = req.body;
-
     const client = new MongoClient(MONGODB_URI);
     await client.connect();
     const db = client.db(DB_NAME);
@@ -538,7 +752,6 @@ app.put("/sallyPostIt/:id", async (req, res) => {
       { $set: updateData },
       { returnDocument: "after" }
     );
-
     await client.close();
 
     if (!result.value) {
@@ -546,7 +759,6 @@ app.put("/sallyPostIt/:id", async (req, res) => {
     }
 
     combinedSystemPrompt = await initializeChatPrompt();
-
     return res.json({ message: "포스트잇 수정 성공 및 프롬프트 갱신 완료 ✅", note: result.value });
   } catch (error) {
     console.error("PUT /sallyPostIt 오류:", error.message);
@@ -561,14 +773,12 @@ app.delete("/sallyPostIt/:id", async (req, res) => {
     await client.connect();
     const db = client.db(DB_NAME);
     const collection = db.collection("sallyPostItNotes");
-
     const result = await collection.deleteOne({ _id: new ObjectId(noteId) });
     await client.close();
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: "삭제할 포스트잇을 찾지 못했습니다." });
     }
-
     return res.json({ message: "포스트잇 삭제 성공" });
   } catch (error) {
     console.error("DELETE /sallyPostIt 오류:", error.message);
@@ -576,25 +786,16 @@ app.delete("/sallyPostIt/:id", async (req, res) => {
   }
 });
 
-
 // ========== [서버 실행 및 프롬프트 초기화] ==========
 (async function initialize() {
   try {
     console.log("🟡 서버 시작 중...");
 
-    // 토큰 불러오기
     await getTokensFromDB();
-
-    // 시스템 프롬프트 한 번만 초기화
     combinedSystemPrompt = await initializeChatPrompt();
-
     console.log("✅ 시스템 프롬프트 초기화 완료");
 
-    // 서버 실행
-    app.listen(PORT, () => {
-      console.log(`🚀 서버 실행 완료! 포트: ${PORT}`);
-    });
-
+    app.listen(PORT, () => console.log(`🚀 서버 실행 완료! 포트: ${PORT}`));
   } catch (err) {
     console.error("❌ 서버 초기화 오류:", err.message);
     process.exit(1);
