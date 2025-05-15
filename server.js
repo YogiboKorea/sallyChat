@@ -156,47 +156,6 @@ async function apiRequest(method, url, data = {}, params = {}) {
 }
 
 
-async function findAnswer(userInput, memberId) {
-  const normalized = normalizeSentence(userInput);
-
-  // 1. FAQ 예시 처리
-  if (normalized.includes("사이즈")) {
-    return {
-      text: "요기보 사이즈는 모델에 따라 다릅니다. 예) 맥스는 170cm x 70cm 크기예요 😊",
-      videoHtml: null,
-      description: null,
-      imageUrl: null
-    };
-  }
-
-  // 2. 배송 상태 요청
-  if (normalized.includes("배송")) {
-    if (!memberId) {
-      return {
-        text: "비회원은 배송 상태를 확인할 수 없습니다. 로그인을 해주세요!",
-        videoHtml: null,
-        description: null,
-        imageUrl: null
-      };
-    }
-    // 배송 조회 로직 들어가는 자리...
-    return {
-      text: "주문하신 상품은 현재 배송 중입니다 🚚",
-      videoHtml: null,
-      description: null,
-      imageUrl: null
-    };
-  }
-
-  // 3. fallback
-  return {
-    text: "질문을 이해하지 못했어요. 좀더 자세히 입력 해주시겠어요",
-    videoHtml: null,
-    description: null,
-    imageUrl: null
-  };
-}
-
 // ========== [5] Cafe24 주문/배송 관련 함수 ==========
 async function getOrderShippingInfo(memberId) {
   const API_URL = `https://${CAFE24_MALLID}.cafe24api.com/api/v2/admin/orders`;
@@ -365,7 +324,7 @@ async function saveConversationLog(memberId, userMessage, botResponse) {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    const logs = db.collection("conversationLogs");
+    const logs = db.collection("sallyfeelDataLoding");
 
     const logEntry = {
       userMessage,
@@ -480,18 +439,7 @@ app.get('/chatConnet', async (req, res) => {
 });
 
 
-// ========== [14] 포스트잇 노트 CRUD ==========
-function convertHashtagsToLinks(text) {
-  const hashtagLinks = {
-    '홈페이지': 'https://sallyfeel.com/',
-  };
-  return text.replace(/@([\w가-힣]+)/g, (match, keyword) => {
-    const url = hashtagLinks[keyword];
-    // 반환 시 keyword만 사용하여 '@' 제거
-    return `<a href="${url}" target="_blank">${keyword}</a>`;
-  });
-}
-
+// ========== [6] 포스트잇 CRUD ==========
 app.get("/sallyPostIt", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const PAGE_SIZE = 300;
@@ -502,30 +450,23 @@ app.get("/sallyPostIt", async (req, res) => {
     const client = new MongoClient(MONGODB_URI);
     await client.connect();
     const db = client.db(DB_NAME);
-    const collection = db.collection("sallyPostNote");
+    const collection = db.collection("sallyPostItNotes");
+
     const totalCount = await collection.countDocuments(queryFilter);
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
-    let currentPage = page;
-    if (currentPage < 1) currentPage = 1;
-    if (totalPages > 0 && currentPage > totalPages) currentPage = totalPages;
+    const currentPage = Math.max(1, Math.min(page, totalPages || 1));
     const skipCount = (currentPage - 1) * PAGE_SIZE;
-    const notes = await collection
-      .find(queryFilter)
+
+    const notes = await collection.find(queryFilter)
       .sort({ _id: -1 })
       .skip(skipCount)
       .limit(PAGE_SIZE)
       .toArray();
-    notes.forEach(doc => {
-      doc._id = doc._id.toString();
-    });
+
+    notes.forEach(doc => doc._id = doc._id.toString());
+
     await client.close();
-    return res.json({
-      notes,
-      currentPage,
-      totalPages,
-      totalCount,
-      pageSize: PAGE_SIZE
-    });
+    return res.json({ notes, currentPage, totalPages, totalCount, pageSize: PAGE_SIZE });
   } catch (error) {
     console.error("GET /sallyPostIt 오류:", error.message);
     return res.status(500).json({ error: "포스트잇 목록 조회 중 오류가 발생했습니다." });
@@ -544,10 +485,9 @@ app.post("/sallyPostIt", async (req, res) => {
     const db = client.db(DB_NAME);
     const collection = db.collection("sallyPostItNotes");
 
-    const convertedAnswer = answer ? convertHashtagsToLinks(answer) : answer;
     const newNote = {
       question,
-      answer: convertedAnswer,
+      answer: convertHashtagsToLinks(answer),
       category: category || "uncategorized",
       createdAt: new Date()
     };
@@ -555,13 +495,9 @@ app.post("/sallyPostIt", async (req, res) => {
     await collection.insertOne(newNote);
     await client.close();
 
-    // ✅ 프롬프트 즉시 갱신
     combinedSystemPrompt = await initializeChatPrompt();
 
-    return res.json({
-      message: "포스트잇 등록 성공 및 프롬프트 갱신 완료 ✅",
-      note: newNote
-    });
+    return res.json({ message: "포스트잇 등록 성공 및 프롬프트 갱신 완료 ✅", note: newNote });
   } catch (error) {
     console.error("POST /sallyPostIt 오류:", error.message);
     return res.status(500).json({ error: "포스트잇 등록 중 오류가 발생했습니다." });
@@ -572,6 +508,7 @@ app.put("/sallyPostIt/:id", async (req, res) => {
   try {
     const noteId = req.params.id;
     const { question, answer, category } = req.body;
+
     const client = new MongoClient(MONGODB_URI);
     await client.connect();
     const db = client.db(DB_NAME);
@@ -590,25 +527,21 @@ app.put("/sallyPostIt/:id", async (req, res) => {
       { $set: updateData },
       { returnDocument: "after" }
     );
+
     await client.close();
 
     if (!result.value) {
       return res.status(404).json({ error: "해당 포스트잇을 찾을 수 없습니다." });
     }
 
-    // ✅ 프롬프트 즉시 갱신
     combinedSystemPrompt = await initializeChatPrompt();
 
-    return res.json({
-      message: "포스트잇 수정 성공 및 프롬프트 갱신 완료 ✅",
-      note: result.value
-    });
+    return res.json({ message: "포스트잇 수정 성공 및 프롬프트 갱신 완료 ✅", note: result.value });
   } catch (error) {
     console.error("PUT /sallyPostIt 오류:", error.message);
     return res.status(500).json({ error: "포스트잇 수정 중 오류가 발생했습니다." });
   }
 });
-
 
 app.delete("/sallyPostIt/:id", async (req, res) => {
   const noteId = req.params.id;
@@ -617,20 +550,20 @@ app.delete("/sallyPostIt/:id", async (req, res) => {
     await client.connect();
     const db = client.db(DB_NAME);
     const collection = db.collection("sallyPostItNotes");
-    const { ObjectId } = require("mongodb");
-    const filter = { _id: new ObjectId(noteId) };
-    const result = await collection.deleteOne(filter);
+
+    const result = await collection.deleteOne({ _id: new ObjectId(noteId) });
     await client.close();
+
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: "삭제할 포스트잇을 찾지 못했습니다." });
     }
+
     return res.json({ message: "포스트잇 삭제 성공" });
   } catch (error) {
     console.error("DELETE /sallyPostIt 오류:", error.message);
     return res.status(500).json({ error: "포스트잇 삭제 중 오류가 발생했습니다." });
   }
 });
-
 
 
 // ========== [서버 실행 및 프롬프트 초기화] ==========
