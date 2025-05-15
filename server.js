@@ -665,7 +665,18 @@ app.get('/chatConnet', async (req, res) => {
 
 
 // ========== [14] 포스트잇 노트 CRUD (sallyPostIt) ==========
-
+function convertHashtagsToLinks(text) {
+  const hashtagLinks = {
+    '홈페이지': 'https://yogibo.kr/',
+    '매장': 'https://yogibo.kr/why/store.html',
+    '카카오플친':'http://pf.kakao.com/_lxmZsxj/chat',
+    '네이버톡톡':'https://talk.naver.com/ct/wc4u67?frm=psf'
+  };
+  return text.replace(/@([\w가-힣]+)/g, (match, keyword) => {
+    const url = hashtagLinks[keyword];
+    return `<a href="${url}" target="_blank">${keyword}</a>`;
+  });
+}
 
 app.get("/sallyPostIt", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
