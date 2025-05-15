@@ -492,6 +492,17 @@ app.post("/sallyPostIt", async (req, res) => {
       createdAt: new Date()
     };
 
+
+    function convertHashtagsToLinks(text) {
+      const hashtagLinks = {
+        '홈페이지': 'https://sallyfeel.com/',
+      };
+      return text.replace(/@([\w가-힣]+)/g, (match, keyword) => {
+        const url = hashtagLinks[keyword];
+        return url ? `<a href="${url}" target="_blank">${keyword}</a>` : keyword;
+      });
+    }
+    
     await collection.insertOne(newNote);
     await client.close();
 
