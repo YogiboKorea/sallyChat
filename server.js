@@ -339,7 +339,7 @@ async function initializeChatPrompt() {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    const postItNotes = await db.collection("postItNotes").find({}).limit(100).toArray();
+    const postItNotes = await db.collection("sallyPostItNotes").find({}).limit(100).toArray();
 
     let postItContext = "\n아래는 참고용 포스트잇 Q&A 데이터입니다:\n";
     postItNotes.forEach(note => {
