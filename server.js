@@ -623,7 +623,7 @@ app.get('/chatConnet', async (req, res) => {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    const collection = db.collection("conversationLogs");
+    const collection = db.collection("conversationLogsSally");
     const data = await collection.find({}).toArray();
 
     // 새로운 Excel 워크북과 워크시트 생성
